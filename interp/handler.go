@@ -280,6 +280,40 @@ func lookPathDir(cwd string, env expand.Environ, file string, find findAny) (str
 	return "", fmt.Errorf("%q: executable file not found in $PATH", file)
 }
 
+// lookAllPathDir is similar to [lookPathDir], but returns all matches from PATH
+// instead of just the first one.
+func lookAllPathDir(cwd string, env expand.Environ, file string) []string {
+	pathList := filepath.SplitList(env.Get("PATH").String())
+	if len(pathList) == 0 {
+		pathList = []string{""}
+	}
+	chars := `/`
+	if runtime.GOOS == "windows" {
+		chars = `:\/`
+	}
+	exts := pathExts(env)
+	if strings.ContainsAny(file, chars) {
+		if f, err := findExecutable(cwd, file, exts); err == nil {
+			return []string{f}
+		}
+		return nil
+	}
+	var results []string
+	for _, elem := range pathList {
+		var path string
+		switch elem {
+		case "", ".":
+			path = "." + string(filepath.Separator) + file
+		default:
+			path = filepath.Join(elem, file)
+		}
+		if f, err := findExecutable(cwd, path, exts); err == nil {
+			results = append(results, f)
+		}
+	}
+	return results
+}
+
 // scriptFromPathDir is similar to [LookPathDir], with the difference that it looks
 // for both executable and non-executable files.
 func scriptFromPathDir(cwd string, env expand.Environ, file string) (string, error) {
