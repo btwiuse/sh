@@ -29,7 +29,7 @@ import (
 	"github.com/u-root/u-root/pkg/core/tar"
 	"github.com/u-root/u-root/pkg/core/touch"
 	"github.com/u-root/u-root/pkg/core/xargs"
-	"mvdan.cc/sh/v3/interp"
+	"github.com/btwiuse/sh/v3/interp"
 )
 
 var commandBuilders = map[string]func() core.Command{

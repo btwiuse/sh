@@ -12,7 +12,7 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/btwiuse/sh/v3/syntax"
 )
 
 func mkfifo(path string, mode uint32) error {

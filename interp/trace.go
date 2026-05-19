@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/btwiuse/sh/v3/syntax"
 )
 
 // tracer prints expressions like a shell would do if its

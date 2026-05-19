@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/go-quicktest/qt"
-	"mvdan.cc/sh/v3/interp"
+	"github.com/btwiuse/sh/v3/interp"
 )
 
 // Each test has an even number of strings, which form input-output pairs for
