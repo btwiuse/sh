@@ -357,11 +357,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		exit = r.builtin(ctx, pos, args[0], args[1:])
 	case "type":
 		anyNotFound := false
+		modeAll := false
 		mode := ""
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
-			case "-a", "-f", "--help":
+			case "-a":
+				modeAll = true
+			case "-f", "--help":
 				return failf(3, "command: NOT IMPLEMENTED\n")
 			case "-p", "-P", "-t":
 				mode = flag
@@ -372,22 +375,37 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		args := fp.args()
 		for _, arg := range args {
 			if mode == "-p" || mode == "-P" {
-				if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
-					r.outf("%s\n", path)
+				if modeAll {
+					paths := lookAllPathDir(r.Dir, r.writeEnv, arg)
+					if len(paths) == 0 {
+						anyNotFound = true
+					}
+					for _, p := range paths {
+						r.outf("%s\n", p)
+					}
 				} else {
-					anyNotFound = true
+					if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
+						r.outf("%s\n", path)
+					} else {
+						anyNotFound = true
+					}
 				}
 				continue
 			}
+			found := false
 			if syntax.IsKeyword(arg) {
+				found = true
 				if mode == "-t" {
 					r.out("keyword\n")
 				} else {
 					r.outf("%s is a shell keyword\n", arg)
 				}
-				continue
+				if !modeAll {
+					continue
+				}
 			}
 			if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
+				found = true
 				var buf bytes.Buffer
 				if len(als.args) > 0 {
 					printer := syntax.NewPrinter()
@@ -403,36 +421,56 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				} else {
 					r.outf("%s is aliased to `%s'\n", arg, &buf)
 				}
-				continue
+				if !modeAll {
+					continue
+				}
 			}
 			if _, ok := r.Funcs[arg]; ok {
+				found = true
 				if mode == "-t" {
 					r.out("function\n")
 				} else {
 					r.outf("%s is a function\n", arg)
 				}
-				continue
+				if !modeAll {
+					continue
+				}
 			}
 			if IsBuiltin(arg) {
+				found = true
 				if mode == "-t" {
 					r.out("builtin\n")
 				} else {
 					r.outf("%s is a shell builtin\n", arg)
 				}
-				continue
+				if !modeAll {
+					continue
+				}
 			}
-			if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
+			if modeAll {
+				paths := lookAllPathDir(r.Dir, r.writeEnv, arg)
+				for _, p := range paths {
+					found = true
+					if mode == "-t" {
+						r.out("file\n")
+					} else {
+						r.outf("%s is %s\n", arg, p)
+					}
+				}
+			} else if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
+				found = true
 				if mode == "-t" {
 					r.out("file\n")
 				} else {
 					r.outf("%s is %s\n", arg, path)
 				}
-				continue
 			}
-			if mode != "-t" {
-				r.errf("type: %s: not found\n", arg)
+			if !found {
+				if mode != "-t" {
+					r.errf("type: %s: not found\n", arg)
+				}
+				anyNotFound = true
 			}
-			anyNotFound = true
 		}
 		if anyNotFound {
 			exit.code = 1

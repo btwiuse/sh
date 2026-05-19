@@ -2616,6 +2616,12 @@ done <<< 2`,
 	{"type -t type", "builtin\n"},
 	{"type -t $PATH_PROG", "file\n"},
 	{"type -t inexisting_dfgsdgfds", "exit status 1"},
+	{"type -a $PATH_PROG | grep -q -E ' is (/|[A-Z]:)'", ""},
+	{"PATH=/; type -a $PATH_PROG", "type: " + pathProg + ": not found\nexit status 1 #JUSTERR"},
+	{"type -ap $PATH_PROG | grep -q -E '^(/|[A-Z]:)'", ""},
+	{"PATH=/; type -ap $PATH_PROG", "exit status 1"},
+	{"type -a type", "type is a shell builtin\n"},
+	{"type -a for", "for is a shell keyword\n"},
 
 	// hash
 	{"hash $PATH_PROG", ""},
