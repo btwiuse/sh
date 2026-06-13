@@ -135,6 +135,10 @@ type Runner struct {
 
 	lastExpandExit exitStatus // used to surface exit statuses while expanding fields
 
+	// lastArg tracks the last argument of the most recently executed simple
+	// command, for setting $_ to match bash's behavior.
+	lastArg string
+
 	// bgProcs holds all background shells spawned by this runner.
 	// Their PIDs are 1-indexed, from 1 to len(bgProcs), with a "g" prefix
 	// to distinguish them from real PIDs on the host operating system.

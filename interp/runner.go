@@ -471,10 +471,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		for _, restore := range restores {
 			r.setVar(restore.name, restore.vr)
 		}
-		// Set $_ to the last argument of the previous command,
-		// matching bash's behavior.
-		if r.exit.ok() && len(fields) > 1 {
-			r.setVarString("_", fields[len(fields)-1])
+		if r.exit.ok() {
+			r.lastArg = fields[len(fields)-1]
 		}
 	case *syntax.BinaryCmd:
 		switch cm.Op {
@@ -799,6 +797,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 			r.setVar(name, vr)
+			if r.exit.ok() {
+				r.lastArg = name
+			}
 		}
 	case *syntax.TimeClause:
 		start := time.Now()
@@ -820,6 +821,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// Should only happen if we forgot a case above.
 		r.errf("unhandled command node: %T\n", cm)
 		r.exit.code = 1
+	}
+	if r.exit.ok() && r.lastArg != "" {
+		r.setVarString("_", r.lastArg)
 	}
 }
 
