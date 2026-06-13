@@ -471,6 +471,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		for _, restore := range restores {
 			r.setVar(restore.name, restore.vr)
 		}
+		// Set $_ to the last argument of the previous command,
+		// matching bash's behavior.
+		if r.exit.ok() && len(fields) > 1 {
+			r.setVarString("_", fields[len(fields)-1])
+		}
 	case *syntax.BinaryCmd:
 		switch cm.Op {
 		case syntax.AndStmt, syntax.OrStmt:
