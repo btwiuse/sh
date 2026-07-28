@@ -3,8 +3,8 @@ module github.com/btwiuse/sh/moreinterp
 go 1.25.0
 
 require (
-	github.com/btwiuse/sh/v3 v3.14.0
-	github.com/u-root/u-root v0.15.1-0.20251208185023-2f8c7e763cf8
+	github.com/btwiuse/sh/v3 v3.14.2
+	github.com/btwiuse/u-root v0.17.0
 )
 
 require (
