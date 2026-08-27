@@ -329,6 +329,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 
 func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	oldIn, oldOut, oldErr := r.stdin, r.stdout, r.stderr
+	var closers []io.Closer
 	for _, rd := range st.Redirs {
 		cls, err := r.redir(ctx, rd)
 		if err != nil {
@@ -336,7 +337,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			break
 		}
 		if cls != nil {
-			defer cls.Close()
+			closers = append(closers, cls)
 		}
 	}
 	if r.exit.ok() && st.Cmd != nil {
@@ -361,7 +362,23 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		}
 	}
 	if !r.keepRedirs {
+		for _, cls := range closers {
+			for n, f := range r.extraFds {
+				if f == cls {
+					delete(r.extraFds, n)
+					break
+				}
+			}
+			cls.Close()
+		}
 		r.stdin, r.stdout, r.stderr = oldIn, oldOut, oldErr
+	} else {
+		// This statement was an `exec` with redirections: its opened files
+		// (including any fd>2 entries) persist for later statements, and its
+		// stdin/stdout/stderr changes stay in place. The flag is consumed
+		// here so that a *later* statement's own redirections are scoped and
+		// restored as usual, matching bash.
+		r.keepRedirs = false
 	}
 }
 
@@ -965,17 +982,18 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	}
 
 	orig := &r.stdout
+	fdNum := 0
 	if rd.N != nil {
-		switch rd.N.Value {
-		case "0":
-			// Note that the input redirects below always use stdin (0)
-			// because we don't support anything else right now.
-		case "1":
-			// The default for the output redirects below.
-		case "2":
+		n, err := strconv.Atoi(rd.N.Value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid redirect fd: %v", rd.N.Value)
+		}
+		fdNum = n
+		if n > 2 {
+			return r.redirFd(ctx, n, rd)
+		}
+		if n == 2 {
 			orig = &r.stderr
-		default:
-			return nil, fmt.Errorf("unsupported redirect fd: %v", rd.N.Value)
 		}
 	}
 	arg := r.literal(rd.Word)
@@ -995,6 +1013,14 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		}()
 		return pr, nil
 	case syntax.DplOut:
+		if src, err := strconv.Atoi(arg); err == nil && src > 2 {
+			f := r.extraFds[src]
+			if f == nil {
+				return nil, fmt.Errorf("bad fd: %d", src)
+			}
+			*orig = f
+			return nil, nil
+		}
 		switch arg {
 		case "1":
 			*orig = r.stdout
@@ -1007,9 +1033,21 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		}
 		return nil, nil
 	case syntax.RdrIn, syntax.RdrOut, syntax.AppOut,
-		syntax.RdrAll, syntax.AppAll:
+		syntax.RdrAll, syntax.AppAll, syntax.RdrInOut:
 		// done further below
 	case syntax.DplIn:
+		if src, err := strconv.Atoi(arg); err == nil && src > 2 {
+			f := r.extraFds[src]
+			if f == nil {
+				return nil, fmt.Errorf("bad fd: %d", src)
+			}
+			stdin, err := stdinFile(f)
+			if err != nil {
+				return nil, err
+			}
+			r.stdin = stdin
+			return nil, nil
+		}
 		switch arg {
 		case "-":
 			r.stdin = nil // closing the input file
@@ -1026,6 +1064,8 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		mode = os.O_WRONLY | os.O_CREATE | os.O_APPEND
 	case syntax.RdrOut, syntax.RdrAll:
 		mode = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	case syntax.RdrInOut:
+		mode = os.O_RDWR | os.O_CREATE
 	}
 	f, err := r.open(ctx, arg, mode, 0o644, true)
 	if err != nil {
@@ -1038,6 +1078,18 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			return nil, err
 		}
 		r.stdin = stdin
+	case syntax.RdrInOut:
+		// A read-write open on stdin (fd 0) keeps the write side too, so
+		// route it through stdinFile which preserves *os.File as-is.
+		if fdNum == 0 {
+			stdin, err := stdinFile(f)
+			if err != nil {
+				return nil, err
+			}
+			r.stdin = stdin
+		} else {
+			*orig = f
+		}
 	case syntax.RdrOut, syntax.AppOut:
 		*orig = f
 	case syntax.RdrAll, syntax.AppAll:
@@ -1046,6 +1098,69 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	default:
 		return nil, fmt.Errorf("unhandled redirect op: %v", rd.Op)
 	}
+	return f, nil
+}
+
+// redirFd applies a redirection to a file descriptor above 2, stored in
+// r.extraFds. Path-based opens (`3>file`, `3<>file`, `3<file`, ...) create
+// the entry; `3>&4` / `3<&4` duplicate an existing extra fd; `3>&-` /
+// `3<&-` close it. The returned closer is closed at statement end unless the
+// statement was an `exec` (keepRedirs), mirroring how stdin/stdout/stderr
+// redirections behave.
+func (r *Runner) redirFd(ctx context.Context, fdNum int, rd *syntax.Redirect) (io.Closer, error) {
+	arg := r.literal(rd.Word)
+	switch rd.Op {
+	case syntax.DplOut, syntax.DplIn:
+		switch arg {
+		case "-":
+			if prev := r.extraFds[fdNum]; prev != nil {
+				delete(r.extraFds, fdNum)
+				prev.Close()
+			}
+			return nil, nil
+		default:
+			src, err := strconv.Atoi(arg)
+			if err != nil || src <= 2 {
+				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
+			}
+			dup := r.extraFds[src]
+			if dup == nil {
+				return nil, fmt.Errorf("bad fd: %d", src)
+			}
+			if prev := r.extraFds[fdNum]; prev != nil {
+				prev.Close()
+			}
+			if r.extraFds == nil {
+				r.extraFds = map[int]io.ReadWriteCloser{}
+			}
+			r.extraFds[fdNum] = dup
+			return nil, nil
+		}
+	}
+	mode := os.O_RDONLY
+	switch rd.Op {
+	case syntax.RdrIn:
+		mode = os.O_RDONLY
+	case syntax.RdrOut:
+		mode = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	case syntax.AppOut:
+		mode = os.O_WRONLY | os.O_CREATE | os.O_APPEND
+	case syntax.RdrInOut:
+		mode = os.O_RDWR | os.O_CREATE
+	default:
+		return nil, fmt.Errorf("unhandled redirect op: %v", rd.Op)
+	}
+	f, err := r.open(ctx, arg, mode, 0o644, true)
+	if err != nil {
+		return nil, err
+	}
+	if r.extraFds == nil {
+		r.extraFds = map[int]io.ReadWriteCloser{}
+	}
+	if prev := r.extraFds[fdNum]; prev != nil {
+		prev.Close()
+	}
+	r.extraFds[fdNum] = f
 	return f, nil
 }
 

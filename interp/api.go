@@ -99,6 +99,13 @@ type Runner struct {
 	stdout io.Writer
 	stderr io.Writer
 
+	// extraFds holds redirections to file descriptors above 2, opened by
+	// statements such as `exec 3<>file` or `3>file`. The `>&3` / `<&3`
+	// duplicates and `3<&-` closes look entries up here. Entries are closed
+	// at the end of the statement that opened them unless it was an `exec`
+	// (keepRedirs), in which case they persist for later statements.
+	extraFds map[int]io.ReadWriteCloser
+
 	ecfg *expand.Config
 	ectx context.Context // just so that Runner.Subshell can use it again
 
@@ -793,6 +800,9 @@ func (r *Runner) Reset() {
 		}
 		// Clean it as we will later do a string prefix match.
 		r.tempDir = filepath.Clean(r.tempDir)
+	}
+	for _, f := range r.extraFds {
+		f.Close()
 	}
 	// reset the internal state
 	*r = Runner{
